@@ -16,6 +16,7 @@ up = np.array([0,0,1])
 arm_model = ("jaco2ModVel") #jaco2 type arm modified to have a .05 cube
 robot_config = MujocoConfig(arm_model)
 dt = 0.001
+force_lim = None
 interface = Mujoco(robot_config, dt=dt)
 #startup command from force_osc_xyz.py, name joints sequentially
 interface.connect(joint_names=[f"joint{ii}" for ii in range(len(robot_config.START_ANGLES))])
@@ -53,8 +54,9 @@ ctrlr = oscVel.OSCVel(
     vmax=vmax,  # [m/s, rad/s]
     # control (x, y, z) out of [x, y, z, alpha, beta, gamma]
     ctrlr_dof=[True, True, True, True, True, True],
-    correcting_force = 120,
-    dt=dt
+    correcting_force = 20,
+    dt=dt,
+    force_lim=force_lim
 )
 def get_distance_to_box():
     """
@@ -114,6 +116,7 @@ def push(duration, target_velocity):
     welded = False
     count = 0
     box_vel = interface.data.sensor("box_velocity").data
+    force = interface.data.sensor("contact_force").data
     while count < duration:
         if welded:
             vel_offset = None
@@ -121,10 +124,10 @@ def push(duration, target_velocity):
             direction = interface.get_xyz("box") - interface.get_xyz("EE")
             direction[2] = 0
             vel_offset = -(direction/np.linalg.norm(direction) * (vmax[0]-0.03)) #if at rest this is fine
-            vel_offset += box_vel[:3]
+            vel_offset += box_vel[:3] #offset the box velocity, should move slightly faster than box velocity
             vel_offset = np.hstack((vel_offset, (0,0,0)))
 
-        if not welded and get_distance_to_box() < 0.102: #This is just barely large enough that it only activates
+        if not welded and get_distance_to_box() < 0.1018: #This is just barely large enough that it only activates
                 #the weld on the surface facing the arm
             interface.model.eq_active[0] = 1
             welded = True
@@ -143,7 +146,8 @@ def push(duration, target_velocity):
             box_velocity=box_vel,
             target_velocity = vel_offset,
             desired_box_velocity=target_velocity,
-            override_task=welded
+            override_task=welded,
+            external_force=force
         )
         interface.send_forces(u)
         force = interface.data.sensor("contact_force").data
@@ -160,16 +164,16 @@ def push(duration, target_velocity):
 try:
     desired_velocity = [-0.1, 0.1, 0]
     prep(desired_velocity)
-    push(2000, desired_velocity)
-    desired_velocity = [0, -0.5, 0]
+    push(1000, desired_velocity)
+    '''desired_velocity = [0, -0.5, 0]
     ctrlr.simple_pid_x.reset()
     ctrlr.simple_pid_y.reset()
-    push(300, desired_velocity)
+    push(50, desired_velocity)
     desired_velocity = [0.2, 0, 0]
     ctrlr.simple_pid_x.reset()
     ctrlr.simple_pid_y.reset()
-    push(1000, desired_velocity)
-
+    push(10, desired_velocity)
+'''
     #prep(desired_velocity)
     #push(1000, desired_velocity)
     while True:
@@ -180,6 +184,11 @@ try:
         target=[0,0,1,0,0,0] #only exists so sim doesn't immediately exit out
         )
         interface.send_forces(u)
+        box_vel = interface.data.sensor("box_velocity").data
+        box_vel_x.append(box_vel[0])
+        box_vel_y.append(box_vel[1])
+        des_vel_x.append(desired_velocity[0])
+        des_vel_y.append(desired_velocity[1])
         if glfw.window_should_close(interface.viewer.window):
             break
 except:
@@ -195,6 +204,7 @@ finally:
   ax1.set_ylabel("force (N)")
   ax1.set_xlabel("Time (ms)")
   ax1.plot(force_track, label="force on EE")
+  #ax1.plot(np.linspace(start=force_lim, stop=force_lim, num=len(force_track)))
   ax1.legend()
   ax2 = fig.add_subplot(212)
   ax2.set_ylabel("direction velocity (m/s)")
